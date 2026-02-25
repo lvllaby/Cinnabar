@@ -26,9 +26,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static com.mojang.blaze3d.platform.DepthTestFunction.NO_DEPTH_TEST;
-import static org.lwjgl.vulkan.VK10.*;
-
 public class Hg3DRenderPipeline implements Hg3DObject, CompiledRenderPipeline, Destroyable {
     
     private static final Map<ShaderSourceCacheKey, String> shaderSourceCache = new Object2ReferenceOpenHashMap<>();
@@ -117,23 +114,33 @@ public class Hg3DRenderPipeline implements Hg3DObject, CompiledRenderPipeline, D
         }
         final var vertexInput = new HgGraphicsPipeline.VertexInput(List.of(new HgGraphicsPipeline.VertexInput.Buffer(0, pipeline.getVertexFormat().getVertexSize(), HgGraphicsPipeline.VertexInput.Buffer.InputRate.VERTEX)), vertexInputBindings);
         
+        @Nullable final HgGraphicsPipeline.DepthTest depthTest;
+        @Nullable final var depthStencilState = pipeline.getDepthStencilState();
+        final float depthBiasConstant;
+        final float depthBiasScale;
+        if (depthStencilState != null) {
+            depthTest = new HgGraphicsPipeline.DepthTest(switch (depthStencilState.depthTest()) {
+                case ALWAYS_PASS -> HgCompareOp.ALWAYS;
+                case EQUAL -> HgCompareOp.EQUAL;
+                case LESS_THAN_OR_EQUAL -> HgCompareOp.LESS_OR_EQUAL;
+                case LESS_THAN -> HgCompareOp.LESS;
+                case NOT_EQUAL -> HgCompareOp.NOT_EQUAL;
+                case GREATER_THAN_OR_EQUAL -> HgCompareOp.GREATER_OR_EQUAL;
+                case GREATER_THAN -> HgCompareOp.GREATER;
+                case NEVER_PASS -> HgCompareOp.NEVER;
+            }, depthStencilState.writeDepth());
+            depthBiasConstant = depthStencilState.depthBiasConstant();
+            depthBiasScale = depthStencilState.depthBiasScaleFactor();
+        } else {
+            depthTest = null;
+            depthBiasConstant = 0.0f;
+            depthBiasScale = 0.0f;
+        }
+        
         final var rasterizer = new HgGraphicsPipeline.Rasterizer(switch (pipeline.getPolygonMode()) {
             case FILL -> HgGraphicsPipeline.Rasterizer.PolygonMode.FILL;
             case WIREFRAME -> HgGraphicsPipeline.Rasterizer.PolygonMode.LINE;
-        }, pipeline.isCull(), pipeline.getDepthBiasConstant(), pipeline.getDepthBiasScaleFactor());
-        
-        @Nullable final HgGraphicsPipeline.DepthTest depthTest;
-        if (pipeline.getDepthTestFunction() != NO_DEPTH_TEST || pipeline.isWriteDepth()) {
-            depthTest = new HgGraphicsPipeline.DepthTest(switch (pipeline.getDepthTestFunction()) {
-                case NO_DEPTH_TEST -> HgCompareOp.ALWAYS;
-                case EQUAL_DEPTH_TEST -> HgCompareOp.EQUAL;
-                case LEQUAL_DEPTH_TEST -> HgCompareOp.LESS_OR_EQUAL;
-                case LESS_DEPTH_TEST -> HgCompareOp.LESS;
-                case GREATER_DEPTH_TEST -> HgCompareOp.GREATER;
-            }, pipeline.isWriteDepth());
-        } else {
-            depthTest = null;
-        }
+        }, pipeline.isCull(), depthBiasConstant, depthBiasScale);
         
         @Nullable final HgGraphicsPipeline.Stencil stencil;
         #if NEO
@@ -151,18 +158,19 @@ public class Hg3DRenderPipeline implements Hg3DObject, CompiledRenderPipeline, D
         stencil = null;
         #endif
         
+        final var colorTarget = pipeline.getColorTargetState();
         @Nullable final HgGraphicsPipeline.Blend blend;
-        if (pipeline.getBlendFunction().isPresent() || !pipeline.isWriteColor() || !pipeline.isWriteAlpha()) {
+        if (colorTarget.blendFunction().isPresent() || colorTarget.writeMask() != (0xF)) {
             @Nullable final Pair<HgGraphicsPipeline.Blend.Equation, HgGraphicsPipeline.Blend.Equation> blendEquations;
-            if (pipeline.getBlendFunction().isPresent()) {
-                final var blendFunc = pipeline.getBlendFunction().get();
+            if (colorTarget.blendFunction().isPresent()) {
+                final var blendFunc = colorTarget.blendFunction().get();
                 final var colorEquation = new HgGraphicsPipeline.Blend.Equation(Hg3DConst.factor(blendFunc.sourceColor()), Hg3DConst.factor(blendFunc.destColor()), HgGraphicsPipeline.Blend.Op.ADD);
                 final var alphaEquation = new HgGraphicsPipeline.Blend.Equation(Hg3DConst.factor(blendFunc.sourceAlpha()), Hg3DConst.factor(blendFunc.destAlpha()), HgGraphicsPipeline.Blend.Op.ADD);
                 blendEquations = new Pair<>(colorEquation, alphaEquation);
             } else {
                 blendEquations = null;
             }
-            final var attachment = new HgGraphicsPipeline.Blend.Attachment(blendEquations, (pipeline.isWriteColor() ? (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT) : 0) | (pipeline.isWriteAlpha() ? VK_COLOR_COMPONENT_A_BIT : 0));
+            final var attachment = new HgGraphicsPipeline.Blend.Attachment(blendEquations, colorTarget.writeMask());
             blend = new HgGraphicsPipeline.Blend(List.of(attachment), new Vector4f());
         } else {
             blend = null;

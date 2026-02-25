@@ -14,9 +14,18 @@ props.load(ins)
 ins.close()
 
 def getGitDescribedVersion = { ->
-    return providers.exec {
+    def described = providers.exec {
         commandLine 'git', 'describe', '--tags', '--dirty=-local', '--candidates=100', '--always'
     }.standardOutput.asText.get().trim()
+    // When no tags exist, --always returns just the commit hash (optionally with -local suffix).
+    // Fall back to mod_version-release_type-gHASH for a meaningful version string.
+    if (described ==~ /[0-9a-f]{7,40}(-local)?/) {
+        def dirty = described.endsWith('-local') ? '-local' : ''
+        def hash = described.replace('-local', '')
+        def base = props.mod_version + (props.release_type != 'release' ? "-${props.release_type}" : '')
+        return "${base}-g${hash}${dirty}"
+    }
+    return described
 }
 
 def getGitDescribedVersionWithMcVersion = { ->

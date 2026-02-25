@@ -10,7 +10,7 @@ plugins {
 
 def getGitDescribedVersion = { ->
     return providers.exec {
-        commandLine 'git', 'describe', '--tags', '--dirty=-local', '--candidates=100'
+        commandLine 'git', 'describe', '--tags', '--dirty=-local', '--candidates=100', '--always'
     }.standardOutput.asText.get().trim()
 }
 
